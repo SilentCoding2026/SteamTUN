@@ -1,4 +1,4 @@
-name: Steam Tunnel Server Daemon New
+name: Steam Tunnel Server Daemon 2
 
 on:
   workflow_dispatch:
@@ -11,12 +11,14 @@ jobs:
     - name: Checkout Repository Code
       uses: actions/checkout@v4
 
-    - name: Install Native Runtime Dependencies
+    - name: Install Native Runtime Dependencies & Virtual Display
       run: |
         sudo dpkg --add-architecture i386
         sudo apt-get update
+        # Added xvfb and xauth to provide a mock headless monitor/display context
         sudo apt-get install -y --no-install-recommends \
-          p7zip-full lib32gcc-s1 lib32stdc++6 libc6:i386 curl wget unzip ca-certificates
+          p7zip-full lib32gcc-s1 lib32stdc++6 libc6:i386 curl wget unzip ca-certificates \
+          xvfb xauth
 
     - name: Automate Latest Xray-Core Download & Install
       run: |
@@ -33,7 +35,7 @@ jobs:
         sudo rm -rf /tmp/xray.zip /tmp/xray-dir
         echo "[+] Xray core engine successfully provisioned globally."
 
-    - name: Authenticate & Maintain Background Steam Instance
+    - name: Authenticate & Maintain Headless Steam Client Instance
       env:
         USER: ${{ secrets.STEAM_USERNAME }}
         PASS: ${{ secrets.STEAM_PASSWORD }}
@@ -42,25 +44,29 @@ jobs:
         wget -qO- "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" | tar -C /home/runner/steamcmd -zxvf -
         
         echo "[*] Running initial SteamCMD bootstrap update..."
-        # We run it once with +quit to force it to download the latest linux64/linux32 binaries and engines
         /home/runner/steamcmd/steamcmd.sh +quit || true
-  
+
         echo "[*] Setting up SDK directory links..."
         mkdir -p /home/runner/.steam/sdk34
         mkdir -p /home/runner/.steam/sdk64
         
-        # FIX: Locate where steamcmd actually placed steamclient.so after bootstrap
-        # Usually it's in ~/.steam/sdk34/ / ~/.steam/sdk64/ or inside the runner's Steam folder
         cp /home/runner/Steam/linux32/steamclient.so /home/runner/.steam/sdk34/steamclient.so || cp /home/runner/steamcmd/linux32/steamclient.so /home/runner/.steam/sdk34/steamclient.so || true
         cp /home/runner/Steam/linux64/steamclient.so /home/runner/.steam/sdk64/steamclient.so || cp /home/runner/steamcmd/linux64/steamclient.so /home/runner/.steam/sdk64/steamclient.so || true
-  
-        echo "[*] Launching Steam client daemon into background context..."
-        # Now launch the actual persistent connection background worker
+
+        echo "[*] Initializing Headless Virtual Display (:99)..."
+        # Start a virtual framebuffer screen so the Steam runtime can map its local IPC sockets
+        Xvfb :99 -screen 0 1024x768x16 > /dev/null 2>&1 &
+        export DISPLAY=:99
+        echo "DISPLAY=:99" >> $GITHUB_ENV
+
+        echo "[*] Launching authenticated Steam client instance..."
+        # Launch steamcmd within the virtual display context and leave it open
         nohup /home/runner/steamcmd/steamcmd.sh +login $USER $PASS > /home/runner/steamcmd.log 2>&1 &
         
-        echo "[*] Waiting 15 seconds for Valve master server handshake..."
+        echo "[*] Waiting 15 seconds for IPC socket creation..."
         sleep 15
         cat /home/runner/steamcmd.log
+
     - name: Extract Server Package
       run: |
         mkdir server_run
@@ -79,6 +85,8 @@ jobs:
         
         echo "480" > steam_appid.txt
         
+        # Share the exact same display variable so the app maps to the identical IPC pipeline
+        export DISPLAY=:99
         export LD_LIBRARY_PATH=.:/home/runner/.steam/sdk64:/home/runner/.steam/sdk34:$LD_LIBRARY_PATH
         export SteamAppId=480
         export STEAM_CONFIG_PATH=/home/runner/Steam
@@ -89,7 +97,6 @@ jobs:
         echo "[*] Waiting for Steam user authentication loops..."
         STEAM_ID=""
         for i in {1..45}; do
-          # Print progress to prevent GitHub Actions from thinking the runner is completely dead
           echo "[*] Checking server logs (Attempt $i/45)..."
           
           if grep -q "YOUR TARGET SERVER STEAMID:" server.log; then
@@ -98,6 +105,8 @@ jobs:
           elif grep -q "CRITICAL ERROR" server.log || grep -q "failed" server.log; then
             echo "[-] Detected immediate crash signature in server.log:"
             cat server.log
+            echo "=== BACKGROUND STEAMCMD LOG ==="
+            cat /home/runner/steamcmd.log
             exit 1
           fi
           sleep 5
