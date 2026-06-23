@@ -41,21 +41,26 @@ jobs:
         mkdir -p /home/runner/steamcmd
         wget -qO- "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" | tar -C /home/runner/steamcmd -zxvf -
         
-        # Setup standard SDK directory links before launching
+        echo "[*] Running initial SteamCMD bootstrap update..."
+        # We run it once with +quit to force it to download the latest linux64/linux32 binaries and engines
+        /home/runner/steamcmd/steamcmd.sh +quit || true
+  
+        echo "[*] Setting up SDK directory links..."
         mkdir -p /home/runner/.steam/sdk34
         mkdir -p /home/runner/.steam/sdk64
-        cp /home/runner/steamcmd/linux32/steamclient.so /home/runner/.steam/sdk34/steamclient.so
-        cp /home/runner/steamcmd/linux64/steamclient.so /home/runner/.steam/sdk64/steamclient.so
-
+        
+        # FIX: Locate where steamcmd actually placed steamclient.so after bootstrap
+        # Usually it's in ~/.steam/sdk34/ / ~/.steam/sdk64/ or inside the runner's Steam folder
+        cp /home/runner/Steam/linux32/steamclient.so /home/runner/.steam/sdk34/steamclient.so || cp /home/runner/steamcmd/linux32/steamclient.so /home/runner/.steam/sdk34/steamclient.so || true
+        cp /home/runner/Steam/linux64/steamclient.so /home/runner/.steam/sdk64/steamclient.so || cp /home/runner/steamcmd/linux64/steamclient.so /home/runner/.steam/sdk64/steamclient.so || true
+  
         echo "[*] Launching Steam client daemon into background context..."
-        # FIX: We remove "+quit" and execute steamcmd in the background via nohup.
-        # This keeps the local Steam IPC pipe active so VpsServer can communicate with it.
+        # Now launch the actual persistent connection background worker
         nohup /home/runner/steamcmd/steamcmd.sh +login $USER $PASS > /home/runner/steamcmd.log 2>&1 &
         
         echo "[*] Waiting 15 seconds for Valve master server handshake..."
         sleep 15
         cat /home/runner/steamcmd.log
-
     - name: Extract Server Package
       run: |
         mkdir server_run
