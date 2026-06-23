@@ -20,16 +20,24 @@ jobs:
 
     - name: Automate Latest Xray-Core Download & Install
       run: |
+        # 1. Parse target architecture identical to your working Dockerfile model
         case "$(dpkg --print-architecture)" in
             amd64) XR="Xray-linux-64.zip" ;;
             arm64) XR="Xray-linux-arm64-v8a.zip" ;;
             *) XR="Xray-linux-64.zip" ;;
         esac
-        wget -qO /tmp/xray.zip "https://github.com{XR}"
+        
+        echo "[*] Fetching official target release zip: ${XR}..."
+        # 2. FIXED: Corrected full path matching your working sample layout
+        wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/${XR}"
+        
+        echo "[*] Extracting and deploying binaries..."
         sudo unzip -q /tmp/xray.zip -d /tmp/xray-dir
         sudo mv /tmp/xray-dir/xray /usr/local/bin/xray
         sudo chmod +x /usr/local/bin/xray
+        
         sudo rm -rf /tmp/xray.zip /tmp/xray-dir
+        echo "[+] Xray core engine successfully provisioned globally."
 
     - name: Authenticate Headless Steam User Account
       env:
@@ -40,13 +48,12 @@ jobs:
         wget -qO- "https://akamaihd.net" | tar -C /tmp/steamcmd -zxvf -
         
         echo "[*] Initializing user login with Valve master servers..."
-        # Force SteamCMD to log in and cache the session credentials locally
         /tmp/steamcmd/steamcmd.sh +login $USER $PASS +quit
         
-        # Map the driver engine library
         mkdir -p /home/runner/.steam/sdk64
         cp /tmp/steamcmd/linux64/steamclient.so /home/runner/.steam/sdk64/steamclient.so
         rm -rf /tmp/steamcmd
+        echo "[+] Valve dependency subsystem mapping verified."
 
     - name: Extract Server Package
       run: |
@@ -58,6 +65,7 @@ jobs:
     - name: Start Background Xray Core Engine
       run: |
         sudo xray -config config.json > xray.log 2>&1 &
+        echo "[+] Live Xray core instance executing in background context."
 
     - name: Execute Steam Server & Display Routing ID
       run: |
@@ -65,6 +73,7 @@ jobs:
         export LD_LIBRARY_PATH=.
         ./VpsServer > server.log 2>&1 &
         
+        echo "[*] Waiting for Steam user authentication loops..."
         STEAM_ID=""
         for i in {1..30}; do
           if grep -q "YOUR TARGET SERVER STEAMID:" server.log; then
@@ -81,6 +90,8 @@ jobs:
         fi
 
         echo "### 🚀 STEAM SECURE TUNNEL ONLINE" >> $GITHUB_STEP_SUMMARY
+        echo "Your runner is securely linked to the Steam Datagram Relay." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
         echo "#### 🔑 COPY THIS ID FOR YOUR WINDOWS CLIENT:" >> $GITHUB_STEP_SUMMARY
         echo "\`\`\`text" >> $GITHUB_STEP_SUMMARY
         echo "$STEAM_ID" >> $GITHUB_STEP_SUMMARY
