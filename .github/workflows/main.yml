@@ -45,7 +45,8 @@ jobs:
         PASS: ${{ secrets.STEAM_PASSWORD }}
       run: |
         mkdir -p /tmp/steamcmd
-        wget -qO- "https://akamaihd.net" | tar -C /tmp/steamcmd -zxvf -
+        # FIXED: Added the correct full path to the steamcmd linux tarball
+        wget -qO- "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" | tar -C /tmp/steamcmd -zxvf -
         
         echo "[*] Initializing user login with Valve master servers..."
         /tmp/steamcmd/steamcmd.sh +login $USER $PASS +quit
