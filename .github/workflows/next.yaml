@@ -1,4 +1,4 @@
-name: Steam Tunnel Server Daemon
+name: 2 Steam Tunnel Server Daemon 
 
 on:
   workflow_dispatch:
