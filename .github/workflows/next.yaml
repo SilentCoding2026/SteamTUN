@@ -1,4 +1,4 @@
-name: 2 Steam Tunnel Server Daemon 
+name: Steam Tunnel Server Daemon
 
 on:
   workflow_dispatch:
@@ -33,7 +33,7 @@ jobs:
         sudo rm -rf /tmp/xray.zip /tmp/xray-dir
         echo "[+] Xray core engine successfully provisioned globally."
 
-    - name: Authenticate Headless Steam User Account
+    - name: Authenticate & Maintain Background Steam Instance
       env:
         USER: ${{ secrets.STEAM_USERNAME }}
         PASS: ${{ secrets.STEAM_PASSWORD }}
@@ -41,16 +41,20 @@ jobs:
         mkdir -p /home/runner/steamcmd
         wget -qO- "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" | tar -C /home/runner/steamcmd -zxvf -
         
-        echo "[*] Initializing user login with Valve master servers..."
-        # Log into the system without killing the state configurations immediately
-        /home/runner/steamcmd/steamcmd.sh +login $USER $PASS +run_script +quit
-        
-        # Mirror library footprints to user home directory where Steam SDK looks by default
+        # Setup standard SDK directory links before launching
         mkdir -p /home/runner/.steam/sdk34
         mkdir -p /home/runner/.steam/sdk64
         cp /home/runner/steamcmd/linux32/steamclient.so /home/runner/.steam/sdk34/steamclient.so
         cp /home/runner/steamcmd/linux64/steamclient.so /home/runner/.steam/sdk64/steamclient.so
-        echo "[+] Valve dependency subsystem mapping verified."
+
+        echo "[*] Launching Steam client daemon into background context..."
+        # FIX: We remove "+quit" and execute steamcmd in the background via nohup.
+        # This keeps the local Steam IPC pipe active so VpsServer can communicate with it.
+        nohup /home/runner/steamcmd/steamcmd.sh +login $USER $PASS > /home/runner/steamcmd.log 2>&1 &
+        
+        echo "[*] Waiting 15 seconds for Valve master server handshake..."
+        sleep 15
+        cat /home/runner/steamcmd.log
 
     - name: Extract Server Package
       run: |
@@ -68,13 +72,9 @@ jobs:
       run: |
         cd server_run
         
-        # 1. Force the client API wrapper token to read AppID 480 (Spacewar test context)
         echo "480" > steam_appid.txt
         
-        # 2. Re-route dynamic libraries to prioritize the authenticated binaries
         export LD_LIBRARY_PATH=.:/home/runner/.steam/sdk64:/home/runner/.steam/sdk34:$LD_LIBRARY_PATH
-        
-        # 3. CRITICAL INTERFACE FIX: Force environment overrides to intercept the missing client application process
         export SteamAppId=480
         export STEAM_CONFIG_PATH=/home/runner/Steam
         export HOME=/home/runner
@@ -84,17 +84,26 @@ jobs:
         echo "[*] Waiting for Steam user authentication loops..."
         STEAM_ID=""
         for i in {1..45}; do
+          # Print progress to prevent GitHub Actions from thinking the runner is completely dead
+          echo "[*] Checking server logs (Attempt $i/45)..."
+          
           if grep -q "YOUR TARGET SERVER STEAMID:" server.log; then
             STEAM_ID=$(grep "YOUR TARGET SERVER STEAMID:" server.log | awk '{print $NF}')
             break
+          elif grep -q "CRITICAL ERROR" server.log || grep -q "failed" server.log; then
+            echo "[-] Detected immediate crash signature in server.log:"
+            cat server.log
+            exit 1
           fi
-          sleep 2
+          sleep 5
         done
 
         if [ -z "$STEAM_ID" ]; then
-          echo "[-] ERROR: Failed to acquire SteamID."
+          echo "[-] ERROR: Failed to acquire SteamID within the time limit."
           echo "=== SERVER LOG ==="
           cat server.log
+          echo "=== BACKGROUND STEAMCMD LOG ==="
+          cat /home/runner/steamcmd.log
           exit 1
         fi
 
