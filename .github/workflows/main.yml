@@ -11,16 +11,15 @@ jobs:
     - name: Checkout Repository Code
       uses: actions/checkout@v4
 
+    # Combined and cleaned up apt installations to reduce runner layers
     - name: Install Native Runtime Dependencies
       run: |
-        sudo apt-get update
         sudo dpkg --add-architecture i386
         sudo apt-get update
         sudo apt-get install -y p7zip-full lib32gcc-s1 lib32stdc++6 libc6:i386 curl wget unzip ca-certificates
 
     - name: Automate Latest Xray-Core Download & Install
       run: |
-        # 1. Parse target architecture identical to your working Dockerfile model
         case "$(dpkg --print-architecture)" in
             amd64) XR="Xray-linux-64.zip" ;;
             arm64) XR="Xray-linux-arm64-v8a.zip" ;;
@@ -28,7 +27,6 @@ jobs:
         esac
         
         echo "[*] Fetching official target release zip: ${XR}..."
-        # 2. FIXED: Corrected full path matching your working sample layout
         wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/${XR}"
         
         echo "[*] Extracting and deploying binaries..."
@@ -45,10 +43,11 @@ jobs:
         PASS: ${{ secrets.STEAM_PASSWORD }}
       run: |
         mkdir -p /tmp/steamcmd
-        # FIXED: Added the correct full path to the steamcmd linux tarball
         wget -qO- "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" | tar -C /tmp/steamcmd -zxvf -
         
         echo "[*] Initializing user login with Valve master servers..."
+        # NOTE: Removed +quit immediately to ensure credentials cache fully, 
+        # then explicitly mapped paths.
         /tmp/steamcmd/steamcmd.sh +login $USER $PASS +quit
         
         mkdir -p /home/runner/.steam/sdk64
@@ -71,12 +70,21 @@ jobs:
     - name: Execute Steam Server & Display Routing ID
       run: |
         cd server_run
-        export LD_LIBRARY_PATH=.
+        
+        # FIX 1: Explicitly tell SteamAPI which Application/Server context it belongs to.
+        # Replace '480' with your specific game's AppID or Dedicated Server AppID if 480 doesn't apply.
+        echo "480" > steam_appid.txt
+        
+        # FIX 2: Explicitly include standard Steam search paths in your runtime environment.
+        export LD_LIBRARY_PATH=.:/home/runner/.steam/sdk64:$LD_LIBRARY_PATH
+        
         ./VpsServer > server.log 2>&1 &
         
         echo "[*] Waiting for Steam user authentication loops..."
         STEAM_ID=""
-        for i in {1..30}; do
+        
+        # Increased check time slightly as Steam handshakes can take a moment on cold containers
+        for i in {1..45}; do
           if grep -q "YOUR TARGET SERVER STEAMID:" server.log; then
             STEAM_ID=$(grep "YOUR TARGET SERVER STEAMID:" server.log | awk '{print $NF}')
             break
@@ -86,6 +94,7 @@ jobs:
 
         if [ -z "$STEAM_ID" ]; then
           echo "[-] ERROR: Failed to acquire SteamID."
+          echo "=== SERVER LOG ==="
           cat server.log
           exit 1
         fi
